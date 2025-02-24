@@ -1,0 +1,292 @@
+---
+title: '在Nest和Electron结合的项目中处理Ts的别名'
+date: '2025-01-20'
+tags: ['Nestjs']
+draft: true
+summary: '在TypeScript项目开发中，我们经常会使用ts别名，通过配置ts的路径映射，可以很方便的处理import'
+---
+
+在TypeScript项目开发中，我们经常会使用ts别名，通过配置ts的路径映射，可以很方便的处理import。比如
+
+```js
+import { formatTime } from '@/utils'
+```
+
+一般当我们通用的脚手架初始化的项目时，比如Vite、Webpack、Rspack等项目中，脚手架已经做了别名处理，可以不用关心。
+
+比如在Vite中, 底层使用rollup别名插件。
+
+```js
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+import { resolve } from 'path'
+
+export default defineConfig({
+  plugins: [vue()],
+  resolve: {
+    alias: {
+      // @ 替代为 src
+      '@': resolve(__dirname, 'src'),
+      '@components': resolve(__dirname, 'src/components'),
+    },
+  },
+})
+```
+
+在Rspack中，使用了tsconfig-paths
+
+```js
+const path = require('path')
+const rspack = require('@rspack/core')
+
+/** @type {import('@rspack/cli').Configuration} */
+const config = {
+  context: __dirname,
+  target: 'node',
+  entry: {
+    main: ['./src/main.ts'],
+  },
+  output: {
+    path: path.resolve(__dirname, 'dist'),
+    filename: '[name].js',
+    clean: true,
+  },
+  resolve: {
+    extensions: ['...', '.ts', '.tsx', '.jsx'],
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
+}
+
+module.exports = config
+```
+
+但是，在自定义脚手架的项目中，如需使用别名就需要自己处理。本人公司项目就是这样一个nest和electron相结合的项目。在试用了一圈工具后，终于解决了别名的问题。
+
+## 原生Ts的编译
+
+默认情况下，Typescript 模仿模块的 Node.js 运行时解析策略。但它还允许使用路径映射，允许指定任意模块路径（不以“/”或“.”开头）并将其映射到文件系统中的物理路径。 Typescript 编译器可以从tsconfig解析这些路径，因此它可以正常编译。但是，如果您随后尝试使用 node （或 ts-node）执行编译后的文件，它只会在node_modules文件夹中查找一直到文件系统的根目录，因此不会找到tsconfig中paths指定的模块。
+
+用一张图表示就是：
+
+![](/static/images/ts编译简要过程.webp)
+
+## 原生ts不支持
+
+#### 为什么ts complier中不支持这个alias这类转换
+
+ts 核心成员说 paths 和 baseUrl 只是在运行时告诉 complier 如何去解析，compiler 不会去重写模块名。具体可详看：https://github.com/microsoft/TypeScript/issues/10866
+
+## 如何解决
+
+#### 1、找插件
+
+从这篇文章[如何在TS中编译别名](https://juejin.cn/post/7282890157254459426)，获知插件的思路大概有2种方式：
+
+1、通过AST修改源代码
+
+- babel
+- ttypescript + typescript-transform-paths
+
+2、通过修改node的require解析策略
+
+- tsconfig-paths
+- module-alias
+
+3、其他不清楚方式的npm包，**在npm上查找最近一年在更新的**
+
+- tsc-alias(周下周 12w+)
+- resolve-tspaths (周下周 5k+)
+
+#### 2、构建工具
+
+- tsup（基于esbuild的上层工具）(不支持nest需要的: emitDecoratorMetadata)
+- esbuild （不支持nest需要的: emitDecoratorMetadata, 可查看[讨论](https://github.com/egoist/tsup/issues/298)
+- rsbuild或rspack（新工具, 重构全部代码。别名也是使用tsconfig-paths）
+- webpack (旧工具，重构全部代码)
+
+## 项目分析
+
+本人公司项目的目录如下图，基本符合通用nest初始化的结果，但又融合了electron，且文件名与node_modules中的electron包名一致(后面试用工具时会遇到到这个问题)
+![](/static/images/重名.webp)
+
+从这边文章[在nest中处理别名](https://juejin.cn/post/6899334066978422792)获知
+
+nest build中做了如下工作：
+
+> Nest build 是标准 tsc 编译器（对于标准项目）或 webpack 编译器（对于 monorepos）之上的包装器。除了处理开箱即用的 tsconfig-paths 之外，它没有添加任何其他编译功能或步骤。它存在的原因是大多数开发人员，特别是在开始使用 Nest 时，不需要调整编译器选项（例如 tsconfig.json 文件），这有时可能很棘手。
+
+从中可以看出nest build其实已经封装好了一切，直接用即可。
+
+再看我们的项目，我们的项目是基于nest实现的自动项目结构，但非nest-cli初始化的项目，目前功能现状：
+
+- 使用tsc原生编译ts (不建议修改)
+- 使用[typescript-cp](https://www.npmjs.com/package/typescript-cp)包监听和复制非ts得文件到dist目录 (不建议修改)
+- nodemon 热更新或者concurrently多命令执行，两种方式都存在项目中(可修改)
+- 配置了.vscode debug用于调试代码，对别名也有需求
+- 还有一个，我们的src目录下，窗口相关的代码文件夹的名字是electron, 与node_modules中electron包的名字一致（后面在试用某个工具时发现此同名对转换别名有影响）
+
+**确定基础方案原则：**
+
+- **保持原有项目目录和构建方式不变（改造成本大，风险高）**
+- **寻找单一功能的工具解决别名问题**
+
+## 工具试用及结果
+
+1. **tsc-alias**
+
+   - **结果**: 不好使，但新建一个ts项目可以替换，公司项目问题。放弃。
+
+2. **resolve-tspaths**
+
+   - **结果**: 出现上面的问题，将src下的的electron目录改个名字可以解决。放弃。
+
+3. **module-alias**
+
+   - **结果**: 使用方式复杂，放弃。
+
+4. **ttypescript + typescript-transform-paths**
+
+   - **结果**: 包太久没更新了，没试用，放弃。
+
+5. **tsup/esbuild**
+
+   - **结果**: 不支持nest需要的emitDecoratorMetadata, 也没找到插件，放弃。
+
+6. **rsbuild或rspack**
+
+   - **结果**: 尝新，字节跳动的新工具，考虑编译会快，调研后发现不适用，需要重构项目，放弃。
+
+7. **babel**
+
+   - **结果**: 可以编译ts, 也可以实现别名转换。测试成功。
+
+8. **nest build或tsconfig-paths**
+   - **结果**: 使用原生编译ts且使用tsconfig-paths处理别名。测试成功。
+
+#### 结论
+
+这个过程相当耗费时间，不断查资料，同时要兼顾工具对项目没有大的破坏性，有能满足ts编译的能力，不破坏原有的热更新方式或支持新的热更新方式。
+
+经过一系列的测试和评估，最终选择了以下两种方法：
+
+- **Babel**: 成功编译TypeScript并实现别名转换。
+- **NestJS Build**: 使用原生编译TypeScript且使用tsconfig-paths自动转换别名。
+
+以上方法均已测试成功，可以根据项目需求选择适合的方案。
+
+## 最终解决方案
+
+#### 第一种 Babel方式（通用）
+
+1. tsc原生编译ts的代码（不修改）
+2. 使用[typescript-cp](https://www.npmjs.com/package/typescript-cp)包监听和复制非ts得文件到dist目录 (不修改)
+3. babel只保留别名替换功能，不编译ts文件
+4. nodemon 热更新
+   - 监听ts文件
+   - 监听非ts文件
+   - tsc 只用来编译ts文件，去掉watch
+   - [typescript-cp](https://www.npmjs.com/package/typescript-cp)只用来复制非ts文件，去掉watch
+5. 配置了.vscode debug用于调试代码
+   - 调试命令中添加3的功能
+
+使用babel，需要新增babel依赖和babel配置
+
+```js
+npm instal -D @babel/cli @babel/core babel-plugin-module-resolver @babel/preset-env
+@babel/preset-typescript
+
+```
+
+@babel/preset-env和@babel/preset-typescript（可选， 如改为使用babel进行ts编译）
+
+配置babel.config.js
+
+```js
+module.exports = {
+  presets: [
+    // "@babel/preset-env",
+    // "@babel/preset-typescript" // 支持 TypeScript
+  ],
+  plugins: [
+    [
+      'module-resolver',
+      {
+        root: ['./'],
+        alias: {
+          '@/cpas-server': './dist/cpas-server',
+        },
+      },
+    ],
+  ],
+  ignore: [
+    'dist/webapps', // 忽略第三方库和无关文件
+    'dist/cpas-server/electron/jquery',
+    'dist/cpas-server/electron/languages',
+  ],
+}
+```
+
+最后转换阶段babel对文件的转换其实有一定耗时的。
+![](/static/images/main.webp)
+
+#### 第二种 Nest Build方式（Nest项目推荐）
+
+![](/static/images/dist-main.webp)
+
+使用nest build -h可以看到其他参数，默认使用原生tsc.
+
+```js
+nest build -p tsconfig.json
+```
+
+用下图描述下2种方式的流程：
+![](/static/images/使用nest build编译.webp)
+
+#### 结果
+
+开发环境，在tsc 编译时，使用tsconfig-paths插件处理别名。
+
+```js
+const tsConfigPaths = require('tsconfig-paths')
+const configLoaderResult = tsConfigPaths.loadConfig('./tsconfig-cp.json')
+if (configLoaderResult.resultType === 'success') {
+  const { absoluteBaseUrl, paths } = configLoaderResult
+  const baseUrl = './' // Either absolute or relative path. If relative it's resolved to current working directory.
+  const cleanup = tsConfigPaths.register({
+    baseUrl,
+    paths: {
+      '@/cpas-server/*': ['./dist/cpas-server/*'],
+    },
+  })
+  // 在应用退出时清理
+  process.on('exit', cleanup)
+
+  // 加载主应用
+  require('./dist/cpas-server/main.js')
+}
+```
+
+生成环境build时，使用nest build自动的功能(内部使用了tsconfig-paths)处理别名
+
+```js
+"nest-tsc": "nest build -p tsconfig-cp.json"
+```
+
+## 总结
+
+在通用的脚手架的项目，比如Vite、Webpack、Rspack、Nest等项目中，脚手架已经做了别名处理，可以不用关心。在自定义脚手架的项目中，可以考虑以下的方式并结合nodemon、ts-node、tsc-watch等工具去尝试解决, 并尽量保持src下文件目录的名称不与常用的报名重复。
+
+- tsc-alias
+- resolve-tspaths
+- tsconfig-paths
+- babel
+- ......
+
+## 参考资料
+
+- [nest-cli](https://docs.nestjs.com/cli/overview) https://docs.nestjs.com/cli/overview
+- [babel](https://babeljs.io/) https://babeljs.io/
+- [如何在TS中编译别名](https://juejin.cn/post/7282890157254459426)https://juejin.cn/post/7282890157254459426
+- [nest中处理别名](https://juejin.cn/post/6899334066978422792)https://juejin.cn/post/6899334066978422792

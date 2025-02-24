@@ -1,0 +1,164 @@
+---
+title: '理解tsconfig中的target和module'
+date: '2024-11-13'
+tags: ['Typescript']
+draft: true
+summary: 'Typescript中的target,module是2个容易迷糊的概念，理清这2个概念的区别至关重要。'
+images: ['/static/images/twitter-card.png']
+---
+
+## target和module的基础知识
+
+![理解target和module的基础知识](/static/images/ts中的target和module.png)
+
+小结：
+- target：编译目标，它定义了编译后的代码的语法版本。例如，target: "ES5" 表示编译后的代码必须兼容 ES5。
+- module：模块类型，它定义了编译后的模块类型。例如，module: "CommonJS" 表示编译后的代码必须使用 CommonJS 模块。
+- moduleResolution：模块解析策略，它定义了如何解析模块。例如，moduleResolution: "Node" 表示使用 Node.js 的模块解析策略。
+
+## 实践的场景
+
+#### 例子1
+在现代的 TypeScript 项目中，通常使用 moduleResolution: "Node"，因为它支持 Node.js 风格的模块查找方式，且兼容更多的第三方库。
+
+```typescript
+// tsconfig.json
+{
+  "compilerOptions": {
+    "module": "Node",
+    "moduleResolution": "Node"
+  }
+}
+```
+#### 例子2
+
+假设你有一个项目，目标是在现代浏览器和 Node.js 环境中使用 ES6 模块，并且支持 ES6 及以上的 JavaScript 特性，你可以配置如下：
+
+```typescript
+// tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES6",           // 编译成 ES6 语法，支持类、箭头函数等特性
+    "module": "ES6",           // 使用 ES6 模块系统，生成 `import` 和 `export`
+    "moduleResolution": "Node" // 使用 Node.js 的模块解析策略
+  }
+}
+```
+#### 例子3
+
+假设你想编译一个 Node.js 16 或更高版本的项目，并且使用现代 ES 模块（import 和 export），你可能会设置如下：
+
+```typescript
+// tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ESNext",         // 输出 ESNext 版本，支持现代语法和特性
+    "module": "ESNext",         // 使用 ES 模块（`import` / `export`）
+    "moduleResolution": "NodeNext", // 使用 NodeNext 模块解析策略，支持 `.mjs` 和 `.cjs`
+    "esModuleInterop": true,    // 启用 ES 模块与 CommonJS 的互操作性
+    "resolveJsonModule": true   // 支持解析 JSON 文件
+  }
+}
+```
+
+## package.json中的type字段
+
+在 TypeScript 项目中，`package.json` 文件中 `type` 字段可以控制项目的模块类型。
+
+- `"type": "commonjs"`：表示项目的模块类型为 CommonJS。使用 require 和 module.exports。
+- `"type": "module"`：表示项目的模块类型为 ES6 模块。默认支持 import 和 export。
+
+这个字段在 Node.js 中被用于确定模块的解析方式，以及 TypeScript 中用于确定模块的解析方式。
+
+在 Node.js 中，CommonJS 模块的解析方式与 TypeScript 中的 `module: "commonjs"` 配置一致。而
+
+### type和TypeScript的关系
+
+在Node.js中，`type` 字段决定了如何处理解析JavaScript模块，而 在TypeScript 中， `module` 和 `moduleResolution` 配置则决定了编译后的输出模块类型。
+
+- 当 type: "module" 时：
+  - 默认情况下，.js 文件被视为 ES 模块（import / export）。
+  - TypeScript 需要生成 ES 模块（module: "ESNext" 或 module: "ES6"），否则可能会出现无法识别 import / export 语法的问题。
+- 当 type: "commonjs" 时：
+  - .js 文件被视为 CommonJS 模块（使用 require 和 module.exports）。
+  - TypeScript 的 module 配置应该选择 CommonJS，以便生成兼容的代码。
+
+#### 例子4
+
+假设你正在开发一个 Node.js 16 项目，并且希望使用 ES 模块，package.json 中的配置可能如下：
+
+```json
+{
+  "name": "my-project",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "typescript": "^4.9"
+  }
+}
+```
+
+在 TypeScript 中，你可以配置 tsconfig.json 使其兼容：
+
+```json
+{
+  "compilerOptions": {
+    "target": "ESNext",        // 输出 ESNext 版本，支持现代语法
+    "module": "ESNext",        // 生成 ES 模块代码（`import` / `export`）
+    "moduleResolution": "NodeNext", // 使用 NodeNext 模块解析策略
+    "esModuleInterop": true,   // 允许从 CommonJS 导入 ES 模块
+    "resolveJsonModule": true  // 支持解析 JSON 文件
+  }
+}
+```
+
+### 新增的node16和nodenext的配置
+
+#### Node16
+
+Node16 是 TypeScript 4.5 引入的一个模块解析策略，基于 Node.js v16 的 ESM 规范。
+
+如果使用node16的模块解析策略，对应的module也要设置成node16
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2020",                          // 设置目标版本
+    "module": "Node16",                          // 设置模块系统为Node16
+    "moduleResolution": "Node16",                // 使用Node.js 16的模块解析策略
+    "outDir": "./dist",                          // 输出目录
+    "rootDir": "./src",                          // 源代码目录
+    "strict": true,                              // 开启严格模式
+    "esModuleInterop": true,                     // 允许CommonJS和ESM互操作
+    "skipLibCheck": true,                        // 跳过类型库检查
+    "forceConsistentCasingInFileNames": true,    // 确保文件名大小写一致
+    "resolveJsonModule": true,                   // 支持JSON模块
+    "allowSyntheticDefaultImports": true         // 允许默认导入
+  },
+  "include": ["src"]
+}
+```
+
+#### NodeNext配置
+NodeNext 是 是 TypeScript 为支持 Node.js 未来 ESM 规范（如 Node.js v18 及以后）提供的更灵活的解析策略。
+
+如果使用node 18及更高版本的的模块解析策略，对应的module也要设置成nodenext
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2020",                          // 设置目标版本
+    "module": "NodeNext",                        // 设置模块系统为NodeNext
+    "moduleResolution": "NodeNext",              // 使用Node.js 18及更高版本的模块解析策略
+    "outDir": "./dist",                          // 输出目录
+    "rootDir": "./src",                          // 源代码目录
+    "strict": true,                              // 开启严格模式
+    "esModuleInterop": true,                     // 允许CommonJS和ESM互操作
+    "skipLibCheck": true,                        // 跳过类型库检查
+    "forceConsistentCasingInFileNames": true,    // 确保文件名大小写一致
+    "resolveJsonModule": true,                   // 支持JSON模块
+    "allowSyntheticDefaultImports": true         // 允许默认导入
+  },
+  "include": ["src"]
+}
+```

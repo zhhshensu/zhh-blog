@@ -1,0 +1,357 @@
+---
+title: '前端Tabs组件模拟React keepAlive机制'
+date: '2024-11-13'
+tags: ['Umi']
+draft: true
+summary: 'KeepAlive 是一种用于缓存组件状态的机制，它允许在组件切换过程中将状态保留在内存中，防止重复渲染 DOM。这对于提升用户体验和应用性能非常有帮助，特别是在处理复杂的表单或数据列表时。'
+---
+
+# 背景介绍
+
+在前端开发中，Tab 组件是常见的用户界面元素，它允许用户在不同内容之间快速切换。在 Vue 中，我们可以使用 KeepAlive 组件来缓存 Tab 页，以保持用户在切换时的状态。然而，在 React 中，我们没有内置的 KeepAlive 功能，因此需要手动实现这一机制。本文将介绍如何利用Tab组件在 React 中模拟 KeepAlive 功能，以实现状态缓存，并具体介绍在开源框架Umi4的代码实现。
+
+# 理解 KeepAlive 的作用
+
+KeepAlive 是一种用于缓存组件状态的机制，它允许在组件切换过程中将状态保留在内存中，防止重复渲染 DOM。这对于提升用户体验和应用性能非常有帮助，特别是在处理复杂的表单或数据列表时。
+写作时遇到思路瓶颈是很常见的情况。以下是一些建议，帮助你找到灵感并继续写作：
+
+# 调研方案
+
+经过技术调研，社区上基本存在以下几种方案:
+
+- Style隐藏法
+  - 方式1：直接css隐藏，缓存在内存中
+  - 方式2：使用 React Context，在父元素缓存
+- Offscreen 组件
+- DOM移动法
+
+## Style隐藏法
+
+```js
+const StyleKeepAlive = ({ children, showComponentName }) => {
+  return (
+    <>
+      {React.Children.map(children, (child) => (
+        <div style={{ display: child.props.name === showComponentName ? 'block' : 'none' }}>
+          {child}
+        </div>
+      ))}
+    </>
+  )
+}
+
+// 使用示例
+;<StyleKeepAlive showComponentName={activeComponent}>
+  <Counter name="A" />
+  <Counter name="B" />
+</StyleKeepAlive>
+```
+
+这种方法虽然简单，但存在一些问题：
+
+- 每次挂载时，所有子组件都会渲染一次。
+- 父组件的 render 会导致子组件的 render，即使它们处于隐藏状态。
+- 对 DOM 结构的侵入性较强，可能会影响性能
+
+## 使用React Context
+
+这种方法涉及到在一个不会被销毁的父组件中保存所有需要缓存的子组件。以下是实现的基本思路：
+
+```js
+import React, { createContext, useState } from 'react'
+
+const KeepAliveContext = createContext()
+
+const AliveScope = ({ children }) => {
+  const [cache, setCache] = useState({})
+
+  const keep = (id, component) => {
+    setCache((prev) => ({ ...prev, [id]: component }))
+  }
+
+  return (
+    <KeepAliveContext.Provider value={keep}>
+      {children}
+      {Object.entries(cache).map(([id, component]) => (
+        <div key={id}>{component}</div>
+      ))}
+    </KeepAliveContext.Provider>
+  )
+}
+
+// 使用示例
+;<AliveScope>
+  <KeepAlive id="A">
+    <Counter name="A" />
+  </KeepAlive>
+  <KeepAlive id="B">
+    <Counter name="B" />
+  </KeepAlive>
+</AliveScope>
+```
+
+这种方法可以有效地缓存组件状态，并在需要时重新渲染
+
+## Offscreen 组件
+
+实现起来比较简单，但React中未真正发布，暂不考虑。
+
+## DOM移动法
+
+由于组件的状态保存的一个前提是该组件必须存在于React组件树中，也就是说必须把这个组件 render 出来，但 render 并不是意味着这个组件会存在于DOM树中，如 createPortal 能把某个组件渲染到任意一个DOM节点上，甚至是内存中的DOM节点。
+那么要实现 KeepAlive，我们可以让这个组件一直存在于 React 组件树中，但不让其存在于 DOM树中。
+社区中两个KeepAlive实现使用最多的库都使用了该方法，react-keep-alive, react-activation
+
+总结：通过上述的例子和文字，我们基本可以得出KeepAlive核心的问题：
+
+- 解决子组件一次性全部渲染的问题
+- 缓存存储的问题：内存，DOM树、React虚拟树
+
+# 具体实现
+
+结合业务和改造成本，我们采用Style隐藏法中的方式1，即直接css隐藏方式。针对上面的问题：
+
+- 采用组件库Antd中Tab组件去实现组件UI和组件切换问题，Tab组件本身已对多个组件的的渲染及切换做了优化。
+- 缓存问题：
+  - 组件级别：依赖antd的Tab组件自身能力
+  - 路由级别：缓存在内存中，依赖umi提供的能力。同时在sessionStorage记录，排除虚拟DOM。
+
+我们来理一下思路：
+
+- 使用Tab组件实现页签功能
+- 将当前渲染的路由与Tab组件关联起来。
+
+下面通过代码实现重点介绍如何将当前渲染的路由与Tab组件关联：
+
+以下组件核心逻辑基于Umi4和React-router6实现
+
+1、获取当前路由
+在React-router中我们可以使用[useOutlet](https://reactrouter.com/en/main/hooks/use-outlet)来获取当前渲染的路由
+
+示例：
+
+我们的KeepAlive组件如下：
+
+```js
+ import { useSelectedRoutes } from 'umi'
+ // 通过useSelectedRoutes可以拿到当前选择的路由数组。匹配到当前的路由
+
+ const KeepAlive = () => {
+   const selectedRoutes = useSelectedRoutes();
+   useEffect(() => {
+    if (selectedRoutes.length > 0) {
+      const curPathname = selectedRoutes[selectedRoutes.length - 1]['pathname'] as any;
+      const curRoute = selectedRoutes[selectedRoutes.length - 1]['route'] as any;
+      if (curPathname !== '/') {
+        const curPage = {
+          key: location.pathname + location.search,
+          title: curRoute.name || curRoute.label,
+          icon: curRoute.icon,
+          content: null, // 组件虚拟dom, 在渲染的时候才添加
+          closable: curRoute.closable ?? true,
+          hide: curRoute.hide ?? false,
+          pattern: {
+            path: curRoute.path, // 路由匹配模式，比如详情页的/detail/:id
+          },
+          search: location.search,
+          state: location.state,
+        };
+        // 调用组件添加tab的方法
+        PageTabsRef.current?.pushTab(curPage);
+      }
+    }
+  }, [selectedRoutes]);
+
+  return (
+    <AudTabs
+      aliveRef={PageTabsRef}
+      alivePrefix={alivePrefix}
+      onChange={(activeKey) => {
+        navigate(activeKey);
+      }}
+      ...
+    />
+  );
+ }
+
+
+
+```
+
+AudTabs组件中核心如下：
+
+```js
+import useUmi from '@/hooks/useUmi';
+import { intl } from '@/utils';
+import getIcon from '@/utils/icon';
+import type { TabsProps } from 'antd';
+import { ConfigProvider, Dropdown, Menu, Spin, Tabs } from 'antd';
+import { findIndex, get, set } from 'lodash';
+import React, { Children, RefObject, Suspense, useImperativeHandle, useMemo, useState } from 'react';
+import { useModel } from 'umi';
+import type { AudPageMenuItem, AudTab } from '../types';
+
+const setStoreTabs = (tabs: AudTab[], alivePrefix: string) => {
+  const cacheKey = `${alivePrefix}-aud-tabs`;
+  try {
+    sessionStorage.setItem(cacheKey, JSON.stringify(tabs));
+  } catch (error) {
+    console.log(`error:`, error);
+  }
+};
+const getStoreTabs = (alivePrefix: string) => {
+  const cacheKey = `${alivePrefix}-aud-tabs`;
+  return JSON.parse(sessionStorage.getItem(cacheKey) || '[]');
+};
+
+type AudTabsProps = {
+  // 弹出菜单
+  popMenu: {
+    items: {
+      key: AudPageMenuItem;
+      title: string;
+      icon?: React.ReactNode;
+    }[];
+    onClick: any;
+  };
+  alivePrefix: string;
+  aliveRef?: RefObject<KeepAliveRef | undefined>;
+} & Omit<TabsProps, 'activeKey'>;
+
+export type CloseAction = 'refresh' | 'closeCur' | 'closeOther' | 'closeAll';
+
+export interface KeepAliveRef {
+  pushTab: (tab: AudTab) => void;
+  closeTabByKey: (key: string) => void;
+  closeTab: (act: CloseAction) => void;
+  getTabs: () => Array<any>;
+  getActiveKey: () => string;
+}
+
+
+const AudTabs: React.FC<AudTabsProps> = (props) => {
+  const { alivePrefix, popMenu, aliveRef, ...restProps } = props;
+
+  const [tabs, setTabs] = useState<AudTab[]>(getStoreTabs(alivePrefix));
+
+  const [activeKey, setActiveKey] = useState('/');
+
+  const { useAppData } = useUmi();
+  const { clientRoutes } = useAppData();
+
+  const tabsWithComponent = useMemo(() => {
+    // 通过上面组件中的pattern.path 和clientRoutes找到组件的虚拟DOM
+    const findCompoent = (routes: any[], patternPath: string) => {
+      let ret = null;
+      routes.forEach((route) => {
+        if (route.path === patternPath) {
+          ret = route.element;
+        } else {
+          if (route.children && Array.isArray(route.children)) {
+            ret = findCompoent(route.children, patternPath);
+          }
+        }
+      });
+      return ret;
+    };
+    const ret = [];
+    const fullTitle = 'menu';
+    for (const tab of tabs) {
+      let title = tab.title;
+      if (tab.state) {
+        title = tab.state?.title || title;
+      }
+      const langTitle = intl(`${fullTitle}.${title}`, title);
+      ret.push({
+        ...tab,
+        title: langTitle || title,
+        icon: getIcon(tab.icon),
+        // 在这里赋值虚拟dom
+        content: tab.refresh ? (
+          <div
+            style={{
+              width: '100%',
+              height: '60vh',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Spin spinning tip="页面刷新中" />
+          </div>
+        ) : (
+          findCompoent(clientRoutes, tab.pattern.path)
+        ),
+      });
+    }
+    return ret;
+  }, [tabs, clientRoutes]);
+
+  const pushTab = (tab: AudTab) => {
+  };
+
+  const closeTabByKey = (key: string) => {
+  };
+
+  const closeTab = (act: CloseAction) => {
+  };
+
+  const getTabs = () => tabs;
+  const getActiveKey = () => activeKey;
+
+  useImperativeHandle(aliveRef, () => ({
+    pushTab,
+    closeTabByKey,
+    closeTab,
+    getTabs,
+    getActiveKey,
+  }));
+
+  return (
+    <Tabs
+      className="page-tabs"
+      type="editable-card"
+      size="small"
+      hideAdd
+      activeKey={activeKey}
+      tabBarExtraContent={{
+        right: (
+          <Dropdown menu={popMenu}>
+            <a onClick={(e) => e.preventDefault()}>{getIcon('UnorderedList')}</a>
+          </Dropdown>
+        ),
+      }}
+      items={tabsWithComponent.map((pane) => {
+        return {
+          label: (<span>{pane.icon}{pane.title}<span>),
+          key: pane.key,
+          closable: pane.closable,
+          className: 'page-tabs-pane',
+          children: pane.content,
+        };
+      })}
+      {...restProps}
+    />
+  );
+};
+
+export default AudTabs;
+
+```
+
+实现效果：
+
+![](/static/images/tabs组件.webp)
+
+总结：
+整体组件基本实现以下功能：
+
+- 基于全局路由，跟路由绑定。
+- 实现基础业务，复杂业务比如部分页面不缓存，部分缓存的场景未实现
+  待考虑的功能：
+- 多级Tabs页签的场景
+- Tabs页签数量较大的清除策略，比如LRU策略等。
+
+# 参考资料
+
+- [React的KeepAlive 探索](https://www.cnblogs.com/dtux/p/18221787)

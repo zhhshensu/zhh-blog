@@ -1,0 +1,174 @@
+---
+title: '理解JavaScript中的抽象操作'
+date: '2024-10-29'
+tags: ['JavaScript']
+draft: true
+summary: '在 Javascript 中执行类型转换。每当发生强制（隐式或显式）时，就会执行一个或多个内部操作（称为抽象操作）。'
+images: ['/static/images/twitter-card.png']
+---
+
+为了便于理解，让我们快速回顾一下JavaScript中的类型。JavaScript 中的变量没有类型，值才有类型。这句话强调了 JavaScript 的动态类型特性：在代码执行过程中，变量可以随时更改为不同的值类型。JavaScript 有八种基本的数据类型，这些类型分为两类：原始类型和非原始类型。
+
+### Primitive Types
+- Undefined
+- Null
+- Boolean
+- String
+- Symbol
+- Number
+- BigInt
+
+### Non-Primitive Types (Reference types)
+- Object
+  - Array
+  - Function
+  >  Arrays 和 Function是Object的子类型
+  
+### 区别
+- 原始类型的值创建后不可以变，而非原始类型是可变的
+- 原始类型按值存储，而非原始类型则安引用存储
+
+### 强制类型转换
+
+“强制类型转换”（coercion）指的是将一个值从一种类型转换为另一种类型的过程，比如将字符串转换为数字。
+
+
+- **隐式转换（Implicit Coercion）**：当你将一个字符串与数字相加时，JavaScript 会自动将数字转换为字符串，然后进行拼接。
+```js
+5 - "1" // 4  JavaScript coerced the string 1 to a number.
+10 * false // 0  Javascript coerced the boolean false to 0.
+10 + true // 11  The boolean true is coerced to a number 1.
+```
+- **显式转换（Explicit Coercion）**：你可以使用函数来手动将类型转换为所需的类型。
+```js
+Number('5') - Number('2') // 3 Here we are explicitly converting both strings to numbers first using the Number() method.
+```
+为了充分理解强制转换是如何发生的，我们需要讨论抽象操作（**Abstract Operations**）。
+
+### 抽象操作
+根据 ECMAScript 规范，抽象操作不是语言规范的一部分，但它们负责在 Javascript 中执行类型转换。每当发生强制（隐式或显式）时，就会执行一个或多个内部操作（称为抽象操作）。
+
+我们将研究这四个主要的抽象操作，但您可以在[规范中找到其余的操作](https://tc39.es/ecma262/#sec-abstract-operations)。
+
+1. ToPrimitive()
+2. ToString()
+3. ToNumber()
+4. ToBoolean()
+
+#### ToPrimitive()
+当在 JavaScript 中一个非原始类型（如对象或数组）出现在需要原始值（例如字符串、数字或布尔值）的场景时，JavaScript 引擎会调用 ToPrimitive() 抽象操作，将非原始值转换为相应的原始值。
+
+规范告诉我们，ToPrimitive() 抽象操作需要两个参数：
+1. **一个输入值**：这是需要被转换的非原始类型值。
+2. **一个可选的 PreferredType 提示**：这个提示参数用来指定希望转换成的原始类型。
+
+PreferredType 提示可以是以下三种之一：string、number 或 default。
+
+具体流程是这样的：
+
+- **调用 ToPrimitive**()：JavaScript 引擎会使用 ToPrimitive() 操作来尝试将该非原始值转换为原始类型。
+
+- **根据上下文选择转换方式**：在 ToPrimitive() 中，有两种类型的上下文：
+
+  - **数字上下文**：如果上下文期望是一个数字，例如在数学运算中，ToPrimitive() 会首先调用 valueOf() 方法来尝试获取一个原始值；如果失败，再调用 toString() 方法。如果它是原始值，则将使用它的值；否则，会导致类型错误。
+  - **字符串上下文**：如果上下文期望是一个字符串，例如在字符串拼接中，ToPrimitive() 会先调用 toString() 方法；如果没有返回字符串，再尝试调用 valueOf()。
+  - **默认上下文**：如果没有期望，则被设置为number, 或者如果它是日期Date, 则被设置为string
+  
+JavaScript 内部算法是递归的：
+  
+> 这意味着，如果调用ToPrimitive()操作并且返回结果不是基元，它将继续被调用，直到返回**原始值或者报错**。
+
+例如：
+```js
+let obj = {
+  toString() { return "object as string"; },
+  valueOf() { return 42; }
+};
+
+console.log(obj + "");   // "object as string"  (字符串上下文，调用 toString)
+console.log(obj + 10);   // 52  (数字上下文，调用 valueOf)
+
+```
+
+![](https://files.mdnice.com/user/74145/14b46d99-081c-4001-996b-78e432180cdb.png)
+
+#### ToString()
+
+ToString() 抽象操作的行为及其在不同值类型上的表现，特别是当操作对象类型时的处理
+
+| 参数        | 结果                             |
+|-----------|---------------------------------|
+| Null      | "null"                           |
+| Undefined | "undefined"                       |
+| true      | "true"                           |
+| false     | "false"                          |
+| "Hi"      | "Hi"                             |
+| Symbol    | 抛出 TypeError 异常               |
+
+如上所示，内置基元具有自然的字符串化，但如果对object类型调用 ToString() 操作，它将调用 ToPrimitive() 操作，并传递 string 作为提示。
+
+如前所述，这将首先调用 toString() 方法，如果得到一个字符串表示，则直接使用；否则，它会尝试调用 valueOf() 方法。
+
+默认情况下，常规 JavaScript 对象具有内置的 toString() 方法（位于 Object.prototype.toString()），当对象以预期为字符串的方式使用时会调用该方法，这将返回其内部 [[Class]] 属性（例如 [object Object]）。
+
+除非您指定了toString()方法，否则如果您以类似字符串的方式使用对象，则将调用其对象原型上的toString()方法。这将返回一个具有 [object Type] 格式的string ，其中Type是对象类型。
+
+示例：
+```js
+const obj = {}
+console.log(obj.toString()) // [object Object]
+```
+尽管arrays是对象类型的子类型，但array对象有一个内置的toString()方法，该方法会重写默认的Object.toString()方法并返回一个string表示形式，其中包含以逗号分隔的每个数组元素。这个toString()方法存在于 Array 的原型上，即Array.prototype.toString() 。
+
+看这个例子：
+```js
+// Calling toString() explicitly on an array
+let array = []
+array.toString() // ""  It returns an empty string.
+
+let array1 = [1, 2, 3]
+array1.toString() // "1,2,3"  It returns a string containing each element in the array seperated by a comma.
+```
+在想要获取数组的类型的情况下，您需要跳过Array.prototype.toString的默认覆盖行为，转而使用Object.prototype.toString() 。
+
+您必须在call()方法中传递array才能将上下文从Array更改为Object 。
+
+```js
+console.log(Object.prototype.toString.call([1, 2, 3])) // [object Array] 
+```
+#### ToNumber()
+每当我们执行数字运算，并且一个或两个操作数都不是数字时，就会调用ToNumber()抽象操作将其转换为number类型的值。
+
+| Argument      | Result                                                                                         |
+|--------------|----------------------------------------------------------------------------------------------|
+| undefined    | NaN                                                                                          |
+| null         | 0                                                                                           |
+| true         | 1                                                                                           |
+| false        | 0                                                                                           |
+| “”           | 0                                                                                           |
+| “.”          | NaN                                                                                          |
+| “1”          | 1                                                                                           |
+| BigInt       | Throw a TypeError exception.                                                                 |
+| symbol       | Throw a TypeError exception.                                                                 |
+| object       | 1. ToPrimitive(argument, number)  2. Return ? ToNumber(primValue).                       |
+从上表中可以看出，当对非原始（任何对象类型）值调用ToNumber()时，首先通过调用ToPrimitive()抽象操作并将number作为 PreferredType 提示传递，将其转换为其等效的原始值。
+ToPrimitive()操作的返回值将被ToNumber()抽象操作强制转换为number 。如果它仍然没有产生原始值，则会抛出错误。
+
+```js
+ToPrimitive( [""], number) // It first calls the ToPrimitive abstract operation on it and pass number as the hint.
+
+[""].valueOf() // [""]  Because  the hint is number, it calls valueOf first and this basically returns itself. So we still have the array with an empty string which isn’t a primitive.
+
+[""].toString() // ""   It then calls the toString() function next and this will end up producing an empty string "".
+
+ToNumber("") // 0   Next it calls ToNumber() and passes the empty string "" as an argument. As seen from the table above, that would result to 0.
+```
+#### ToBoolean()
+每当我们在需要Boolean地方使用非Boolean值时，都会调用抽象操作ToBoolean()将参数转换为 Boolean 类型。 **ToBoolean()抽象操作不会调用ToPrimitive()或任何其他抽象操作。**
+
+它只是检查该值是否为假。规范中有一个查找表，它定义了一个值列表，当强制转换为boolean时，这些值将返回false 。
+
+### 参考资料
+- https://dev.to/iphiee_oma/understand-javascript-abstract-operations-in-7-minutes-1951
+
+- https://medium.com/@akashsdas_dev/javascript-coercion-3b288095b399
